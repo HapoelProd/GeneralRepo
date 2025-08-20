@@ -1,118 +1,103 @@
 # app.py
 import io
 from pathlib import Path
-
 import pandas as pd
 import streamlit as st
 
-DEFAULT_COL = "InstallmentPaymentExtRef"
-DEFAULT_TARGET = 79991
+st.set_page_config(page_title="Installments Splitter", layout="centered")
 
-def find_col(df: pd.DataFrame, wanted: str) -> str:
-    """Find column name ignoring spaces/case; raise if missing."""
-    norm = {c: "".join(str(c).split()).lower() for c in df.columns}
-    key = "".join(wanted.split()).lower()
-    for orig, n in norm.items():
-        if n == key:
-            return orig
-    raise KeyError(f"Column '{wanted}' not found. Available: {list(df.columns)}")
+# --- Custom styling ---
+st.markdown("""
+<style>
+/* Center the main title */
+h1 {
+    text-align: center !important;
+    font-size: 3rem !important;
+    margin-bottom: 2rem !important;
+}
 
-def split_by_extref_block_df(df: pd.DataFrame, extref_col: str, target_value: int | float):
-    """
-    Split into two DataFrames by 'blocks':
-    a block begins where extref_col is non-null; rows below with empty extref_col
-    belong to the same block until the next non-empty appears.
-    All blocks whose header equals target_value go to 'only', the rest to 'except'.
-    """
-    # treat as numeric to avoid '79991' vs '79991.0' issues
-    col = find_col(df, extref_col)
-    ext_numeric = pd.to_numeric(df[col], errors="coerce")
+/* Force the "Upload CSV" label to be huge and bold */
+div.stFileUploader label {
+    display: block;
+    text-align: center !important;
+    font-size: 3rem !important;    /* much bigger now */
+    font-weight: 900 !important;   /* extra bold */
+    margin-bottom: 1.5rem !important;
+    color: #222 !important;        /* darker for visibility */
+}
 
-    # block id: every non-null value in the raw column starts a new block
-    block_id = df[col].notna().cumsum()
+/* Make the uploader dropzone taller */
+div[data-testid="stFileUploaderDropzone"] {
+    min-height: 220px;
+    padding: 2rem 1.5rem;
+    border-width: 2px;
+}
+div[data-testid="stFileUploaderDropzone"] * {
+    font-size: 1.2rem;
+}
 
-    # which blocks are target blocks (header row equals target)
-    target_blocks = block_id[ext_numeric == float(target_value)].unique()
+/* Make buttons bigger */
+.stButton > button, .stDownloadButton > button {
+    font-size: 1.2rem !important;
+    padding: 1rem 2rem !important;
+    border-radius: 12px !important;
+    display: block;
+    margin: 1.2rem auto;   /* center buttons */
+}
+</style>
+""", unsafe_allow_html=True)
 
-    mask = block_id.isin(target_blocks)
-    only_df = df[mask].copy()
-    except_df = df[~mask].copy()
-    return only_df, except_df
+st.title("Installments Splitter")
 
-def to_excel_bytes(df1: pd.DataFrame, df2: pd.DataFrame, name1="except_79991", name2="only_79991") -> bytes:
-    """Write two DataFrames to a single XLSX in-memory and return bytes."""
-    bio = io.BytesIO()
-    with pd.ExcelWriter(bio, engine="openpyxl") as writer:
-        df1.to_excel(writer, sheet_name=name1, index=False)
-        df2.to_excel(writer, sheet_name=name2, index=False)
-    bio.seek(0)
-    return bio.getvalue()
-
-# -------------------------- UI --------------------------
-
-st.set_page_config(page_title="Split Installments by ExtRef", page_icon="🗂️", layout="centered")
-st.title("🗂️ Split Installments by ExtRef (CSV → Excel with 2 sheets)")
-
-st.markdown(
-    "Upload the CSV report. The app will group rows into blocks by "
-    f"**{DEFAULT_COL}** and move the block(s) where the header equals the target value into a separate sheet."
-)
+# Fixed target value
+TARGET_VAL = "79991"
 
 uploaded = st.file_uploader("Upload CSV", type=["csv"])
-col_name = st.text_input("Column name to check", value=DEFAULT_COL)
-target_val = st.text_input("Target value", value=str(DEFAULT_TARGET))
-target_val_num = pd.to_numeric(target_val, errors="coerce")
+process_clicked = st.button("Process")
 
-advanced = st.expander("Advanced CSV read options")
-with advanced:
-    sep = st.text_input("Delimiter (leave empty to auto-detect)", value="")
-    encoding = st.text_input("Encoding", value="utf-8-sig")
-    has_header = st.checkbox("File has header row", value=True)
+def make_excel_bytes(only_df: pd.DataFrame, rest_df: pd.DataFrame,
+                     name_only="Only_79991", name_rest="Rest") -> bytes:
+    bio = io.BytesIO()
+    with pd.ExcelWriter(bio, engine="openpyxl") as w:
+        only_df.to_excel(w, sheet_name=name_only, index=False)
+        rest_df.to_excel(w, sheet_name=name_rest, index=False)
+    bio.seek(0)
+    return bio.read()
 
-if uploaded is not None and st.button("Process file"):
-    if pd.isna(target_val_num):
-        st.error("Target value must be numeric (e.g., 79991).")
-        st.stop()
-
-    # Read CSV (try auto sep if not provided)
+if uploaded is not None and process_clicked:
     try:
-        read_kwargs = dict(encoding=encoding)
-        if sep.strip():
-            read_kwargs["sep"] = sep
-        else:
-            read_kwargs["sep"] = None  # auto-detect with Python engine
-            read_kwargs["engine"] = "python"
-        if not has_header:
-            read_kwargs["header"] = None
-
-        df = pd.read_csv(uploaded, **read_kwargs)
+        df = pd.read_csv(uploaded, encoding="utf-8-sig", sep=None, engine="python")
     except Exception as e:
+        st.error("Failed to read CSV:")
         st.exception(e)
         st.stop()
 
     try:
-        only_df, except_df = split_by_extref_block_df(df, col_name, target_val_num)
+        df['block_key'] = df['InstallmentPaymentExtRef'].replace(
+            {"": pd.NA, "nan": pd.NA, "NaN": pd.NA}
+        ).ffill()
+        df["block_key"] = pd.to_numeric(df["block_key"], errors="coerce").astype("Int64").astype(str)
+
+        only_79991 = df[df["block_key"] == TARGET_VAL].drop(columns=["block_key"])
+        rest = df[df["block_key"] != TARGET_VAL].drop(columns=["block_key"])
     except Exception as e:
+        st.error("Processing error:")
         st.exception(e)
         st.stop()
 
-    st.success(f"Done. Found {len(only_df)} row(s) in target block(s); {len(except_df)} row(s) in the rest.")
+    st.success(f"Rows in {TARGET_VAL} block: {only_79991.shape[0]} | Rows in rest: {rest.shape[0]}")
 
-    st.subheader("Preview – only 79991 block(s)")
-    st.dataframe(only_df, use_container_width=True, hide_index=True)
+    st.subheader(f"Preview – Only {TARGET_VAL} block")
+    st.dataframe(only_79991, use_container_width=True, hide_index=True)
 
-    st.subheader("Preview – everything else")
-    st.dataframe(except_df, use_container_width=True, hide_index=True)
+    st.subheader("Preview – Rest")
+    st.dataframe(rest, use_container_width=True, hide_index=True)
 
-    # Build Excel download
-    xlsx_bytes = to_excel_bytes(except_df, only_df, name1="except_79991", name2="only_79991")
+    xbytes = make_excel_bytes(only_79991, rest, name_only="Only_79991", name_rest="Rest")
     default_name = Path(uploaded.name).with_suffix("").name + "_split.xlsx"
     st.download_button(
-        "⬇️ Download Excel (2 sheets)",
-        data=xlsx_bytes,
+        "Download Excel (2 sheets)",
+        data=xbytes,
         file_name=default_name,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
-
-st.markdown("---")
-st.caption("Tip: If the column header in your CSV has spaces or different casing, the app will still find it.")
