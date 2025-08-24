@@ -1,0 +1,7 @@
+# Ignore env files
+.env
+*.env
+
+# Ignore Jupyter notebook checkpoints
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
