@@ -27,7 +27,7 @@ def set_background(image_file):
         unsafe_allow_html=True
     )
 
-set_background("אוהדים.jpg")
+set_background("fans.jpg")
 
 # --- Custom styling ---
 st.markdown("""
