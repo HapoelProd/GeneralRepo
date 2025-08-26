@@ -8,16 +8,15 @@ import streamlit as st
 st.set_page_config(page_title="Installments Splitter", layout="centered")
 
 # --- Set background image with dark overlay ---
-def set_background(image_file):
-    with open(image_file, "rb") as f:
-        data = f.read()
-    b64 = base64.b64encode(data).decode()
+import streamlit as st
+
+def set_background_from_url(url: str):
     st.markdown(
         f"""
         <style>
         .stApp {{
             background: linear-gradient(rgba(0,0,0,0.55), rgba(0,0,0,0.55)),
-                        url("data:image/jpg;base64,{b64}");
+                        url("{url}");
             background-size: cover;
             background-position: center;
             background-attachment: fixed;
@@ -27,7 +26,9 @@ def set_background(image_file):
         unsafe_allow_html=True
     )
 
-set_background("fans.jpg")
+set_background_from_url(
+    "https://raw.githubusercontent.com/HapoelJLM/Hapoel/main/bookkeeping/fans.jpg"
+)
 
 # --- Custom styling ---
 st.markdown("""
