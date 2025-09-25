@@ -1,6 +1,0 @@
-streamlit
-pandas
-xlsxwriter
-requests
-simple-salesforce
-python-dotenv
